@@ -1,78 +1,108 @@
-from pathlib import Path
+"""Score a local checkpoint and benchmark warm, serial, single-dialogue inference."""
+import argparse
+import hashlib
+import json
+import platform
+import statistics
 import time
+from datetime import datetime, timezone
+from importlib.metadata import version
+from pathlib import Path
 
-import evaluate
 import torch
 from datasets import load_from_disk
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from src.textSummarizer.utils.rouge_metrics import rouge_scores
+
+from src.textSummarizer.pipeline.predicition_pipeline import (
+    GENERATION_KWARGS, MAX_INPUT_TOKENS, PredictionPipeline,
+)
 
 
-MODEL_PATH = Path("artifacts/model_trainer/pegasus-samsum-model")
-TOKENIZER_PATH = Path("artifacts/model_trainer/tokenizer")
-DATA_PATH = Path("artifacts/data_transformation/samsum_dataset")
-SAMPLE_SIZE = 100
-BATCH_SIZE = 4
+def percentile(values, fraction):
+    ordered = sorted(values)
+    index = (len(ordered) - 1) * fraction
+    lower = int(index)
+    upper = min(lower + 1, len(ordered) - 1)
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
 
 
-def evaluate_model():
-    missing = [path for path in (MODEL_PATH, TOKENIZER_PATH, DATA_PATH) if not path.exists()]
+def evaluate_model(args):
+    paths = (args.model_path, args.tokenizer_path, args.data_path)
+    missing = [str(path) for path in paths if not path.is_dir()]
     if missing:
-        missing_paths = ", ".join(str(path) for path in missing)
         raise FileNotFoundError(
-            f"Evaluation artifacts are missing: {missing_paths}. "
-            "Run the training pipeline before benchmarking."
+            f"Missing evaluation artifacts: {', '.join(missing)}. "
+            "Run python main.py to train a checkpoint before benchmarking."
         )
+    dataset = load_from_disk(str(args.data_path))['test']
+    if not len(dataset):
+        raise ValueError('The test split is empty.')
+    if args.sample_size:
+        dataset = dataset.shuffle(seed=args.seed).select(range(min(args.sample_size, len(dataset))))
+    predictor = PredictionPipeline(args.model_path, args.tokenizer_path)
+    for _ in range(args.warmup):
+        predictor.predict(dataset[0]['dialogue'])
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_PATH)
-    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH).to(device)
-    model.eval()
+    records, timings = [], []
+    for row in dataset:
+        if predictor.device.type == 'cuda':
+            torch.cuda.synchronize()
+        start = time.perf_counter()
+        summary = predictor.predict(row['dialogue'])
+        if predictor.device.type == 'cuda':
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+        timings.append(elapsed)
+        records.append({'id': row.get('id'), 'prediction': summary,
+                        'reference': row['summary'], 'latency_seconds': elapsed})
+        if len(records) % 25 == 0:
+            print(f"Evaluated {len(records)}/{len(dataset)} examples", flush=True)
 
-    dataset = load_from_disk(DATA_PATH)["test"]
-    sample = dataset.select(range(min(SAMPLE_SIZE, len(dataset))))
-    metric = evaluate.load("rouge")
-    total_seconds = 0.0
-    prediction_count = 0
-
-    with torch.inference_mode():
-        for start in range(0, len(sample), BATCH_SIZE):
-            dialogues = sample[start : start + BATCH_SIZE]["dialogue"]
-            inputs = tokenizer(
-                dialogues,
-                max_length=1024,
-                truncation=True,
-                padding=True,
-                return_tensors="pt",
-            ).to(device)
-
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            started = time.perf_counter()
-            generated = model.generate(
-                **inputs,
-                num_beams=8,
-                length_penalty=0.8,
-                max_length=128,
-            )
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            total_seconds += time.perf_counter() - started
-
-            predictions = tokenizer.batch_decode(generated, skip_special_tokens=True)
-            metric.add_batch(
-                predictions=predictions,
-                references=sample[start : start + BATCH_SIZE]["summary"],
-            )
-            prediction_count += len(predictions)
-
-    scores = metric.compute()
-    print(f"device: {device}")
-    print(f"samples: {prediction_count}")
-    print(f"ROUGE-1: {scores['rouge1']:.6f}")
-    print(f"ROUGE-2: {scores['rouge2']:.6f}")
-    print(f"ROUGE-L: {scores['rougeL']:.6f}")
-    print(f"average inference latency: {total_seconds / prediction_count * 1000:.3f} ms/summary")
+    config_path = args.model_path / 'config.json'
+    report = {
+        'timestamp_utc': datetime.now(timezone.utc).isoformat(),
+        'model_path': str(args.model_path.resolve()),
+        'model_config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        'tokenizer_path': str(args.tokenizer_path.resolve()),
+        'dataset_path': str(args.data_path.resolve()),
+        'dataset_fingerprint': dataset._fingerprint,
+        'split': 'test', 'samples': len(records), 'sampling_seed': args.seed,
+        'device': str(predictor.device),
+        'hardware': torch.cuda.get_device_name() if predictor.device.type == 'cuda' else platform.processor(),
+        'platform': platform.platform(),
+        'versions': {name: version(name) for name in ('torch', 'transformers', 'datasets', 'rouge-score')},
+        'generation': {**GENERATION_KWARGS, 'max_input_tokens': MAX_INPUT_TOKENS},
+        'rouge_f1_percent': rouge_scores([r['prediction'] for r in records], [r['reference'] for r in records]),
+        'rouge_method': 'Arithmetic mean of per-example F1, stemming enabled; 0-100 scale.',
+        'latency_seconds': {'mean': statistics.mean(timings), 'p50': percentile(timings, .5),
+                            'p95': percentile(timings, .95), 'warmup_requests': args.warmup,
+                            'batch_size': 1,
+                            'scope': 'Warm serial pipeline: tokenization, generation, decoding; excludes model load, HTTP, network and queueing.'},
+        'training_provenance': 'Confirm checkpoint was trained only on train; this report cannot establish that.',
+    }
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / 'metrics.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    with (args.output / 'predictions.jsonl').open('w', encoding='utf-8') as stream:
+        for record in records:
+            stream.write(json.dumps(record, ensure_ascii=False) + '\n')
+    print(json.dumps(report, indent=2))
+    return report
 
 
-if __name__ == "__main__":
-    evaluate_model()
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--model-path', type=Path, default=Path('artifacts/model_trainer/pegasus-samsum-model'))
+    parser.add_argument('--tokenizer-path', type=Path, default=Path('artifacts/model_trainer/tokenizer'))
+    parser.add_argument('--data-path', type=Path, default=Path('artifacts/data_transformation/samsum_dataset'))
+    parser.add_argument('--sample-size', type=int, default=0, help='0 evaluates the entire test split.')
+    parser.add_argument('--warmup', type=int, default=3)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--output', type=Path, default=Path('artifacts/benchmark'))
+    args = parser.parse_args()
+    if args.sample_size < 0 or args.warmup < 0:
+        parser.error('--sample-size and --warmup must be nonnegative')
+    return args
+
+
+if __name__ == '__main__':
+    evaluate_model(parse_args())

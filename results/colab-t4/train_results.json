@@ -1,0 +1,11 @@
+{
+  "epoch": 1.0,
+  "gradient_accumulation_steps": 16,
+  "total_flos": 5535528134172672.0,
+  "train_loss": 29.822246139393826,
+  "train_runtime": 3830.493,
+  "train_samples": 14731,
+  "train_samples_per_second": 3.846,
+  "train_steps_per_second": 0.24,
+  "validation_samples": 818
+}

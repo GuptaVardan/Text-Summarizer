@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.env
+.env.*
+artifacts
+logs
+local_notes
+colab_project.zip
+research

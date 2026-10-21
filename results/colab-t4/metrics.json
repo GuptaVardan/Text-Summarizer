@@ -1,0 +1,41 @@
+{
+  "timestamp_utc": "2026-10-21T21:11:13.509594+00:00",
+  "model_path": "/content/drive/MyDrive/textsummarizer-verification/model_trainer/pegasus-samsum-model",
+  "model_config_sha256": "757f2c739530a42dbca7d2ef7b2366d9410a45d0481203f13a8da995e9056467",
+  "tokenizer_path": "/content/drive/MyDrive/textsummarizer-verification/model_trainer/tokenizer",
+  "dataset_path": "/content/textsummarizer/artifacts/data_transformation/samsum_dataset",
+  "dataset_fingerprint": "c047c3fe87408372",
+  "split": "test",
+  "samples": 819,
+  "sampling_seed": 42,
+  "device": "cuda",
+  "hardware": "Tesla T4",
+  "platform": "Linux-6.6.122+-x86_64-with-glibc2.39",
+  "versions": {
+    "torch": "2.11.0+cu130",
+    "transformers": "5.20.1",
+    "datasets": "4.8.5",
+    "rouge-score": "0.1.2"
+  },
+  "generation": {
+    "length_penalty": 0.8,
+    "num_beams": 8,
+    "max_length": 128,
+    "max_input_tokens": 1024
+  },
+  "rouge_f1_percent": {
+    "rouge1": 45.258652662933656,
+    "rouge2": 21.60762461253922,
+    "rougeL": 35.60316975723061
+  },
+  "rouge_method": "Arithmetic mean of per-example F1, stemming enabled; 0-100 scale.",
+  "latency_seconds": {
+    "mean": 0.7915379093076967,
+    "p50": 0.7206071090004116,
+    "p95": 1.1750204433999898,
+    "warmup_requests": 3,
+    "batch_size": 1,
+    "scope": "Warm serial pipeline: tokenization, generation, decoding; excludes model load, HTTP, network and queueing."
+  },
+  "training_provenance": "Confirm checkpoint was trained only on train; this report cannot establish that."
+}

@@ -10,10 +10,11 @@ class ModelTrainer:
     def __init__(self, config: ModelTrainerConfig):
         self.config = config
 
-    def train(self):
+    def train(self, resume_from_checkpoint=None):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         tokenizer = AutoTokenizer.from_pretrained(self.config.model_ckpt)
         model_pegasus = AutoModelForSeq2SeqLM.from_pretrained(self.config.model_ckpt).to(device)
+        model_pegasus.config.use_cache = False
         seq2seq_data_collator = DataCollatorForSeq2Seq(tokenizer, model=model_pegasus)
 
         #loading the data
@@ -31,14 +32,24 @@ class ModelTrainer:
             eval_steps=self.config.eval_steps,
             save_steps=int(self.config.save_steps),
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            gradient_checkpointing=True,
+            save_total_limit=2,
+            report_to="none",
         )
         trainer = Trainer(model=model_pegasus, args=trainer_args,
-                  tokenizer=tokenizer, data_collator=seq2seq_data_collator,
-                  train_dataset=dataset_samsum_pt["test"],
+                  processing_class=tokenizer, data_collator=seq2seq_data_collator,
+                  train_dataset=dataset_samsum_pt["train"],
                   eval_dataset=dataset_samsum_pt["validation"])
         
-        trainer.train()
+        result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        trainer.save_metrics("train", {
+            **result.metrics,
+            "train_samples": len(dataset_samsum_pt["train"]),
+            "validation_samples": len(dataset_samsum_pt["validation"]),
+            "gradient_accumulation_steps": self.config.gradient_accumulation_steps,
+        })
 
+        model_pegasus.config.use_cache = True
         ## Save model
         model_pegasus.save_pretrained(os.path.join(self.config.root_dir,"pegasus-samsum-model"))
         ## Save tokenizer
