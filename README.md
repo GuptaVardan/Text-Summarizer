@@ -21,6 +21,10 @@ ROUGE uses mean per-example F1 with stemming on a 0-100 scale. Latency measures 
 
 The [benchmark report](results/colab-t4/metrics.json) and [training report](results/colab-t4/train_results.json) were captured from the completed Colab run and supplied by the project owner. See [result provenance](results/colab-t4/README.md) for versions, limitations, and reproduction details. Checkpoint weights and per-example predictions are not included in Git.
 
+The project owner obtained the previously reported **29.2 ROUGE-1, 22.6 ROUGE-L, and 1.2 s average inference latency** in a separate Google Colab experiment, using Colab because the development laptop has no dedicated GPU. That experiment's notebook and detailed run artifacts are not included in this repository, so its exact training/evaluation sample counts and latency timing boundaries are not documented here. The notebooks under `research/` do not establish the configuration of that separate run.
+
+A subsequent review corrected split selection and decoded-text preprocessing in the repository implementation. The new documented Colab run trained on **14,731 valid training examples**, used **818 separate validation examples**, and evaluated all **819 held-out test examples**, with decoded text preserved and an explicit ROUGE protocol. It recorded **45.26 ROUGE-1, 35.60 ROUGE-L, and 0.792 s mean warm pipeline latency on a Tesla T4**. These results supersede the earlier reported figures. Because the earlier experiment's full configuration is not available here, this is not a controlled before-and-after comparison, and the score difference cannot be attributed to a particular bug fix or dataset-size change. See [CHANGELOG.md](CHANGELOG.md) for the repository corrections.
+
 ## Pipeline
 
 ```text
